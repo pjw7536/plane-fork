@@ -9,4 +9,5 @@ export default defineConfig({
   clean: true,
   sourcemap: true,
   target: "esnext",
+  ignoreWatch: ["**/.turbo/turbo-dev.log"],
 });
