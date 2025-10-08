@@ -88,6 +88,11 @@ class IssueCreateSerializer(BaseSerializer):
         write_only=True,
         required=False,
     )
+    module_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        write_only=True,
+        required=False,
+    )
     assignee_ids = serializers.ListField(
         child=serializers.PrimaryKeyRelatedField(queryset=User.objects.all()),
         write_only=True,
@@ -114,6 +119,8 @@ class IssueCreateSerializer(BaseSerializer):
         data["assignee_ids"] = assignee_ids if assignee_ids else []
         label_ids = self.initial_data.get("label_ids")
         data["label_ids"] = label_ids if label_ids else []
+        module_ids = self.initial_data.get("module_ids")
+        data["module_ids"] = module_ids if module_ids else []
         return data
 
     def validate(self, attrs):
@@ -157,6 +164,39 @@ class IssueCreateSerializer(BaseSerializer):
                 ).values_list("id", flat=True)
             )
 
+        # Validate modules are from project
+        if "module_ids" in attrs:
+            module_ids = attrs.get("module_ids") or []
+            project_id = self.context.get("project_id") or getattr(self.instance, "project_id", None)
+
+            if module_ids and project_id is None:
+                raise serializers.ValidationError({"module_ids": "Project context is required"})
+
+            unique_module_ids = []
+            seen_modules = set()
+            for module_id in module_ids:
+                module_key = str(module_id)
+                if module_key not in seen_modules:
+                    unique_module_ids.append(module_id)
+                    seen_modules.add(module_key)
+
+            if unique_module_ids and project_id is not None:
+                modules_queryset = Module.objects.filter(
+                    project_id=project_id,
+                    id__in=unique_module_ids,
+                    deleted_at__isnull=True,
+                    archived_at__isnull=True,
+                ).values_list("id", flat=True)
+
+                module_lookup = {str(module_id): module_id for module_id in modules_queryset}
+                invalid_modules = [module_id for module_id in unique_module_ids if str(module_id) not in module_lookup]
+                if invalid_modules:
+                    raise serializers.ValidationError({"module_ids": "Invalid modules for this project"})
+
+                attrs["module_ids"] = [module_lookup[str(module_id)] for module_id in unique_module_ids]
+            else:
+                attrs["module_ids"] = []
+
         # Check state is from the project only else raise validation error
         if (
             attrs.get("state")
@@ -191,17 +231,50 @@ class IssueCreateSerializer(BaseSerializer):
     def create(self, validated_data):
         assignees = validated_data.pop("assignee_ids", None)
         labels = validated_data.pop("label_ids", None)
+        modules = validated_data.pop("module_ids", None)
 
         project_id = self.context["project_id"]
-        workspace_id = self.context["workspace_id"]
+        workspace_id = self.context.get("workspace_id")
         default_assignee_id = self.context["default_assignee_id"]
 
         # Create Issue
         issue = Issue.objects.create(**validated_data, project_id=project_id)
 
+        if workspace_id is None:
+            workspace_id = issue.workspace_id
+
         # Issue Audit Users
         created_by_id = issue.created_by_id
         updated_by_id = issue.updated_by_id
+
+        if modules is not None:
+            unique_modules = []
+            seen_modules = set()
+            for module_id in modules:
+                module_key = str(module_id)
+                if module_key not in seen_modules:
+                    unique_modules.append(module_id)
+                    seen_modules.add(module_key)
+
+            if unique_modules:
+                try:
+                    ModuleIssue.objects.bulk_create(
+                        [
+                            ModuleIssue(
+                                module_id=module_id,
+                                issue=issue,
+                                project_id=project_id,
+                                workspace_id=workspace_id,
+                                created_by_id=created_by_id,
+                                updated_by_id=updated_by_id,
+                            )
+                            for module_id in unique_modules
+                        ],
+                        batch_size=10,
+                        ignore_conflicts=True,
+                    )
+                except IntegrityError:
+                    pass
 
         if assignees is not None and len(assignees):
             try:
@@ -268,6 +341,7 @@ class IssueCreateSerializer(BaseSerializer):
     def update(self, instance, validated_data):
         assignees = validated_data.pop("assignee_ids", None)
         labels = validated_data.pop("label_ids", None)
+        modules = validated_data.pop("module_ids", None)
 
         # Related models
         project_id = instance.project_id
@@ -316,6 +390,36 @@ class IssueCreateSerializer(BaseSerializer):
                 )
             except IntegrityError:
                 pass
+
+        if modules is not None:
+            ModuleIssue.objects.filter(issue=instance).delete()
+            unique_modules = []
+            seen_modules = set()
+            for module_id in modules or []:
+                module_key = str(module_id)
+                if module_key not in seen_modules:
+                    unique_modules.append(module_id)
+                    seen_modules.add(module_key)
+
+            if unique_modules:
+                try:
+                    ModuleIssue.objects.bulk_create(
+                        [
+                            ModuleIssue(
+                                module_id=module_id,
+                                issue=instance,
+                                project_id=project_id,
+                                workspace_id=workspace_id,
+                                created_by_id=created_by_id,
+                                updated_by_id=updated_by_id,
+                            )
+                            for module_id in unique_modules
+                        ],
+                        batch_size=10,
+                        ignore_conflicts=True,
+                    )
+                except IntegrityError:
+                    pass
 
         # Time updation occues even when other related models are updated
         instance.updated_at = timezone.now()

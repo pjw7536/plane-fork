@@ -96,6 +96,20 @@ export const InboxIssueProperties: FC<TInboxIssueProperties> = observer((props) 
         />
       </div>
 
+      {/* modules */}
+      <div className="h-7">
+        <ModuleDropdown
+          projectId={projectId}
+          value={data?.module_ids || []}
+          onChange={(moduleIds) => handleData("module_ids", moduleIds)}
+          placeholder="Modules"
+          buttonVariant={(data?.module_ids || [])?.length > 0 ? "transparent-without-text" : "border-with-text"}
+          buttonClassName={(data?.module_ids || [])?.length > 0 ? "hover:bg-transparent" : ""}
+          multiple
+          tabIndex={getIndex("module_ids")}
+        />
+      </div>
+
       {/* start date */}
       {isVisible && (
         <div className="h-7">
@@ -132,22 +146,6 @@ export const InboxIssueProperties: FC<TInboxIssueProperties> = observer((props) 
             placeholder="Cycle"
             buttonVariant="border-with-text"
             tabIndex={getIndex("cycle_id")}
-          />
-        </div>
-      )}
-
-      {/* module */}
-      {isVisible && (
-        <div className="h-7">
-          <ModuleDropdown
-            value={data?.module_ids || []}
-            onChange={(moduleIds) => handleData("module_ids", moduleIds)}
-            projectId={projectId}
-            placeholder="Modules"
-            buttonVariant="border-with-text"
-            multiple
-            showCount
-            tabIndex={getIndex("module_ids")}
           />
         </div>
       )}

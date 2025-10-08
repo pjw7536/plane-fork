@@ -1,8 +1,9 @@
 "use client";
 
 import React from "react";
+import { xor } from "lodash-es";
 import { observer } from "mobx-react";
-import { CalendarCheck2, CopyPlus, Signal, Tag, Users } from "lucide-react";
+import { CalendarCheck2, CopyPlus, Layers, Signal, Tag, Users } from "lucide-react";
 import { DoubleCircleIcon } from "@plane/propel/icons";
 import { Tooltip } from "@plane/propel/tooltip";
 import { TInboxDuplicateIssueDetails, TIssue } from "@plane/types";
@@ -13,6 +14,7 @@ import { DateDropdown } from "@/components/dropdowns/date";
 import { MemberDropdown } from "@/components/dropdowns/member/dropdown";
 import { PriorityDropdown } from "@/components/dropdowns/priority";
 import { StateDropdown } from "@/components/dropdowns/state/dropdown";
+import { ModuleDropdown } from "@/components/dropdowns/module/dropdown";
 import type { TIssueOperations } from "@/components/issues/issue-detail";
 import { IssueLabel } from "@/components/issues/issue-detail/label";
 // hooks
@@ -46,6 +48,28 @@ export const InboxIssueContentProperties: React.FC<Props> = observer((props) => 
     projectIdentifier: currentProjectDetails?.identifier,
     sequenceId: duplicateIssueDetails?.sequence_id,
   });
+
+  const handleModuleChange = async (moduleIds: string[]) => {
+    if (!issueOperations.changeModulesInIssue || !issue?.id) return;
+    const existingModuleIds = issue?.module_ids ?? [];
+    const updatedModuleIds = xor(existingModuleIds, moduleIds);
+    const modulesToAdd: string[] = [];
+    const modulesToRemove: string[] = [];
+
+    for (const moduleId of updatedModuleIds)
+      if (existingModuleIds.includes(moduleId)) modulesToRemove.push(moduleId);
+      else modulesToAdd.push(moduleId);
+
+    if (!modulesToAdd.length && !modulesToRemove.length) return;
+
+    await issueOperations.changeModulesInIssue(
+      workspaceSlug,
+      projectId,
+      issue.id,
+      modulesToAdd,
+      modulesToRemove
+    );
+  };
 
   return (
     <div className="flex w-full flex-col divide-y-2 divide-custom-border-200">
@@ -170,6 +194,33 @@ export const InboxIssueContentProperties: React.FC<Props> = observer((props) => 
                     }
                   />
                 )}
+              </div>
+            </div>
+
+            {/* Modules */}
+            <div className="flex min-h-8 items-center gap-2">
+              <div className="flex w-2/5 flex-shrink-0 items-center gap-1 text-sm text-custom-text-300">
+                <Layers className="h-4 w-4 flex-shrink-0" />
+                <span>Modules</span>
+              </div>
+              <div className="w-3/5 flex-grow min-h-8 h-full pt-1">
+                <ModuleDropdown
+                  projectId={projectId}
+                  value={issue?.module_ids ?? []}
+                  onChange={handleModuleChange}
+                  disabled={!isEditable || !issueOperations.changeModulesInIssue}
+                  placeholder="Add modules"
+                  multiple
+                  className="group h-full"
+                  buttonContainerClassName="w-full text-left"
+                  buttonClassName={`text-sm justify-between ${
+                    issue?.module_ids && issue.module_ids.length > 0 ? "" : "text-custom-text-400"
+                  }`}
+                  buttonVariant="transparent-with-text"
+                  hideIcon={issue?.module_ids?.length === 0}
+                  dropdownArrow
+                  dropdownArrowClassName="h-3.5 w-3.5 hidden group-hover:inline"
+                />
               </div>
             </div>
 

@@ -4,6 +4,7 @@ import json
 # Django imports
 from django.core.serializers.json import DjangoJSONEncoder
 from django.utils import timezone
+from django.db import IntegrityError
 from django.db.models import Q, Value, UUIDField
 from django.db.models.functions import Coalesce
 from django.contrib.postgres.aggregates import ArrayAgg
@@ -23,7 +24,16 @@ from plane.api.serializers import (
 )
 from plane.app.permissions import ProjectLitePermission
 from plane.bgtasks.issue_activities_task import issue_activity
-from plane.db.models import Intake, IntakeIssue, Issue, Project, ProjectMember, State
+from plane.db.models import (
+    Intake,
+    IntakeIssue,
+    Issue,
+    Module,
+    ModuleIssue,
+    Project,
+    ProjectMember,
+    State,
+)
 from plane.utils.host import base_host
 from .base import BaseAPIView
 from plane.db.models.intake import SourceType
@@ -165,6 +175,28 @@ class IntakeIssueListCreateAPIEndpoint(BaseAPIView):
         ]:
             return Response({"error": "Invalid priority"}, status=status.HTTP_400_BAD_REQUEST)
 
+        module_ids = request.data.get("issue", {}).get("module_ids", []) or []
+        unique_module_ids = []
+        seen_modules = set()
+        for module_id in module_ids:
+            if module_id and module_id not in seen_modules:
+                unique_module_ids.append(module_id)
+                seen_modules.add(module_id)
+
+        module_lookup = {}
+        if unique_module_ids:
+            modules_queryset = Module.objects.filter(
+                project_id=project_id,
+                id__in=unique_module_ids,
+                deleted_at__isnull=True,
+                archived_at__isnull=True,
+            ).values_list("id", flat=True)
+            module_lookup = {str(module_id): module_id for module_id in modules_queryset}
+
+            invalid_modules = [module_id for module_id in unique_module_ids if module_id not in module_lookup]
+            if invalid_modules:
+                return Response({"error": "Invalid modules"}, status=status.HTTP_400_BAD_REQUEST)
+
         # create an issue
         issue = Issue.objects.create(
             name=request.data.get("issue", {}).get("name"),
@@ -173,6 +205,26 @@ class IntakeIssueListCreateAPIEndpoint(BaseAPIView):
             priority=request.data.get("issue", {}).get("priority", "none"),
             project_id=project_id,
         )
+
+        if module_lookup:
+            try:
+                ModuleIssue.objects.bulk_create(
+                    [
+                        ModuleIssue(
+                            module_id=module_lookup[module_id],
+                            issue=issue,
+                            project_id=project_id,
+                            workspace_id=project.workspace_id,
+                            created_by_id=issue.created_by_id,
+                            updated_by_id=issue.updated_by_id,
+                        )
+                        for module_id in unique_module_ids
+                    ],
+                    batch_size=10,
+                    ignore_conflicts=True,
+                )
+            except IntegrityError:
+                pass
 
         # create an intake issue
         intake_issue = IntakeIssue.objects.create(

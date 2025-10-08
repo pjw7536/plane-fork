@@ -270,7 +270,7 @@ class IntakeIssueViewSet(BaseViewSet):
             )
             intake_issue = (
                 IntakeIssue.objects.select_related("issue")
-                .prefetch_related("issue__labels", "issue__assignees")
+                .prefetch_related("issue__labels", "issue__assignees", "issue__issue_module__module")
                 .annotate(
                     label_ids=Coalesce(
                         ArrayAgg(
@@ -288,6 +288,18 @@ class IntakeIssueViewSet(BaseViewSet):
                             distinct=True,
                             filter=~Q(issue__assignees__id__isnull=True)
                             & Q(issue__assignees__member_project__is_active=True),
+                        ),
+                        Value([], output_field=ArrayField(UUIDField())),
+                    ),
+                    module_ids=Coalesce(
+                        ArrayAgg(
+                            "issue__issue_module__module_id",
+                            distinct=True,
+                            filter=Q(
+                                ~Q(issue__issue_module__module_id__isnull=True)
+                                & Q(issue__issue_module__module__archived_at__isnull=True)
+                                & Q(issue__issue_module__deleted_at__isnull=True)
+                            ),
                         ),
                         Value([], output_field=ArrayField(UUIDField())),
                     ),
