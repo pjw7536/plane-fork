@@ -1,11 +1,12 @@
 "use client";
 
 import type { MutableRefObject } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { combine } from "@atlaskit/pragmatic-drag-and-drop/combine";
 import { draggable, dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { observer } from "mobx-react";
 import { useParams } from "next/navigation";
+import { format } from "date-fns";
 // plane helpers
 import { MoreHorizontal } from "lucide-react";
 import { useOutsideClickDetector } from "@plane/hooks";
@@ -15,8 +16,8 @@ import { Tooltip } from "@plane/propel/tooltip";
 import type { TIssue, IIssueDisplayProperties, IIssueMap } from "@plane/types";
 import { EIssueServiceType } from "@plane/types";
 // ui
-import { ControlLink, DropIndicator } from "@plane/ui";
-import { cn, generateWorkItemLink } from "@plane/utils";
+import { Avatar, ControlLink, DropIndicator } from "@plane/ui";
+import { cn, generateWorkItemLink, getFileURL } from "@plane/utils";
 // components
 import RenderIfVisible from "@/components/core/render-if-visible-HOC";
 import { HIGHLIGHT_CLASS, getIssueBlockId } from "@/components/issues/issue-layouts/utils";
@@ -25,6 +26,7 @@ import { HIGHLIGHT_CLASS, getIssueBlockId } from "@/components/issues/issue-layo
 import { useIssueDetail } from "@/hooks/store/use-issue-detail";
 import { useKanbanView } from "@/hooks/store/use-kanban-view";
 import { useProject } from "@/hooks/store/use-project";
+import { useMember } from "@/hooks/store/use-member";
 import useIssuePeekOverviewRedirection from "@/hooks/use-issue-peek-overview-redirection";
 import { usePlatformOS } from "@/hooks/use-platform-os";
 // plane web components
@@ -70,6 +72,7 @@ const KanbanIssueDetailsBlock: React.FC<IssueDetailsBlockProps> = observer((prop
   const [isMenuActive, setIsMenuActive] = useState(false);
   // hooks
   const { isMobile } = usePlatformOS();
+  const { getUserDetails } = useMember();
 
   const customActionButton = (
     <div
@@ -85,6 +88,20 @@ const KanbanIssueDetailsBlock: React.FC<IssueDetailsBlockProps> = observer((prop
 
   // derived values
   const subIssueCount = issue?.sub_issues_count ?? 0;
+
+  const formattedUpdatedAt = useMemo(() => {
+    if (!issue.updated_at) return null;
+
+    const parsedDate = new Date(issue.updated_at);
+    if (Number.isNaN(parsedDate.getTime())) return null;
+
+    return format(parsedDate, "MM/dd hh:mm a").toUpperCase();
+  }, [issue.updated_at]);
+
+  const updatedByDetails = issue?.updated_by ? getUserDetails(issue.updated_by) : undefined;
+  const createdByDetails = issue?.created_by ? getUserDetails(issue.created_by) : undefined;
+  const lastChangeUserDetails = updatedByDetails ?? createdByDetails;
+  const lastChangeAvatarUrl = lastChangeUserDetails?.avatar_url ? getFileURL(lastChangeUserDetails.avatar_url) : undefined;
 
   const handleEventPropagation = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -119,11 +136,23 @@ const KanbanIssueDetailsBlock: React.FC<IssueDetailsBlockProps> = observer((prop
         </div>
       </div>
 
-      <Tooltip tooltipContent={issue.name} isMobile={isMobile} renderByDefault={false}>
-        <div className="w-full line-clamp-1 text-sm text-custom-text-100">
-          <span>{issue.name}</span>
-        </div>
-      </Tooltip>
+      <div className="w-full mb-1.5">
+        <Tooltip tooltipContent={issue.name} isMobile={isMobile} renderByDefault={false}>
+          <div className="line-clamp-1 text-sm text-custom-text-100">
+            <span>{issue.name}</span>
+          </div>
+        </Tooltip>
+        {formattedUpdatedAt && (
+          <div className="mt-1 flex w-full items-center justify-end gap-2 text-xs text-custom-text-300">
+            {lastChangeUserDetails && (
+              <div className="flex-shrink-0">
+                <Avatar size="md" name={lastChangeUserDetails.display_name} src={lastChangeAvatarUrl} />
+              </div>
+            )}
+            <span>{formattedUpdatedAt}</span>
+          </div>
+        )}
+      </div>
 
       <IssueProperties
         className="flex flex-wrap items-center gap-2 whitespace-nowrap text-custom-text-300 pt-1.5"
