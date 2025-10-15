@@ -2,7 +2,6 @@
 import json
 
 # Django imports
-from django.core import serializers
 from django.db.models import Count, F, Func, OuterRef, Prefetch, Q
 from django.utils import timezone
 from django.core.serializers.json import DjangoJSONEncoder
@@ -668,62 +667,62 @@ class ModuleIssueListCreateAPIEndpoint(BaseAPIView):
             return Response({"error": "Issues are required"}, status=status.HTTP_400_BAD_REQUEST)
         module = Module.objects.get(workspace__slug=slug, project_id=project_id, pk=module_id)
 
-        issues = Issue.objects.filter(workspace__slug=slug, project_id=project_id, pk__in=issues).values_list(
-            "id", flat=True
+        issues = list(
+            Issue.objects.filter(workspace__slug=slug, project_id=project_id, pk__in=issues).values_list("id", flat=True)
         )
 
         module_issues = list(ModuleIssue.objects.filter(issue_id__in=issues))
+        existing_module_issue_map = {module_issue.issue_id: module_issue for module_issue in module_issues}
 
-        update_module_issue_activity = []
-        records_to_update = []
-        record_to_create = []
+        records_to_update: list[ModuleIssue] = []
+        records_to_create: list[ModuleIssue] = []
+        updated_issue_ids: list[str] = []
+        created_issue_ids: list[str] = []
 
-        for issue in issues:
-            module_issue = [module_issue for module_issue in module_issues if str(module_issue.issue_id) in issues]
+        for issue_id in issues:
+            module_issue = existing_module_issue_map.get(issue_id)
 
-            if len(module_issue):
-                if module_issue[0].module_id != module_id:
-                    update_module_issue_activity.append(
-                        {
-                            "old_module_id": str(module_issue[0].module_id),
-                            "new_module_id": str(module_id),
-                            "issue_id": str(module_issue[0].issue_id),
-                        }
-                    )
-                    module_issue[0].module_id = module_id
-                    records_to_update.append(module_issue[0])
+            if module_issue:
+                if module_issue.module_id != module_id:
+                    module_issue.module_id = module_id
+                    module_issue.updated_by = request.user
+                    records_to_update.append(module_issue)
+                    updated_issue_ids.append(str(issue_id))
             else:
-                record_to_create.append(
+                records_to_create.append(
                     ModuleIssue(
                         module=module,
-                        issue_id=issue,
+                        issue_id=issue_id,
                         project_id=project_id,
                         workspace=module.workspace,
                         created_by=request.user,
                         updated_by=request.user,
                     )
                 )
+                created_issue_ids.append(str(issue_id))
 
-        ModuleIssue.objects.bulk_create(record_to_create, batch_size=10, ignore_conflicts=True)
+        ModuleIssue.objects.bulk_create(records_to_create, batch_size=10, ignore_conflicts=True)
+        ModuleIssue.objects.bulk_update(records_to_update, ["module", "updated_by"], batch_size=10)
 
-        ModuleIssue.objects.bulk_update(records_to_update, ["module"], batch_size=10)
+        # Capture Issue Activity for realtime updates
+        if created_issue_ids or updated_issue_ids:
+            epoch = int(timezone.now().timestamp())
+            actor_id = str(self.request.user.id)
+            project_id_str = str(project_id)
+            origin = base_host(request=request, is_app=True)
+            requested_payload = json.dumps({"module_id": str(module_id)})
 
-        # Capture Issue Activity
-        issue_activity.delay(
-            type="module.activity.created",
-            requested_data=json.dumps({"modules_list": str(issues)}),
-            actor_id=str(self.request.user.id),
-            issue_id=None,
-            project_id=str(self.kwargs.get("project_id", None)),
-            current_instance=json.dumps(
-                {
-                    "updated_module_issues": update_module_issue_activity,
-                    "created_module_issues": serializers.serialize("json", record_to_create),
-                }
-            ),
-            epoch=int(timezone.now().timestamp()),
-            origin=base_host(request=request, is_app=True),
-        )
+            for issue_id in [*created_issue_ids, *updated_issue_ids]:
+                issue_activity.delay(
+                    type="module.activity.created",
+                    requested_data=requested_payload,
+                    actor_id=actor_id,
+                    issue_id=str(issue_id),
+                    project_id=project_id_str,
+                    current_instance=None,
+                    epoch=epoch,
+                    origin=origin,
+                )
 
         return Response(
             ModuleIssueSerializer(self.get_queryset(), many=True).data,
